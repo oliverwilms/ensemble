@@ -3,8 +3,11 @@
    Confidential property of InterSystems Corporation. */
 
 /// Adapter that receives files via the FTP protocol.
-Class Oliver.FTP.InboundAdapter Extends (EnsLib.File.InboundAdapter, EnsLib.FTP.Common) [ ClassType = "", Inheritance = right, ProcedureBlock, System = 4 ]
+Class Oliver.FTP.InboundAdapter Extends (EnsLib.File.InboundAdapter, Oliver.FTP.Common) [ ClassType = "", Inheritance = right, ProcedureBlock, System = 4 ]
 {
+
+/// Do not skip previously errored files
+Parameter UnskipErrorFiles = 1;
 
 /* (may be overridden in BusinessService's OnInit() method by setting the properties
     ..Adapter.FilenameExpression,TimestampExpression,IsDirExpression,SizeExpression) */
@@ -137,6 +140,8 @@ Property %LastFileNeedsRetrying As %Boolean [ InitialExpression = 0, Internal ];
 /* below are propertySet methods duplicated from OutboundAdapter because EnsLib.FTP.Common does not inerit from EnsLib.File.Common to avoid double-inheritance of EnsLib.File.Common */
 Method FilePathSet(path As %String) As %Status [ Internal ]
 {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - FilePathSet()"
+ Set ^TESTftp((0-$G(^TESTftp)),"path") = $Get(path)
 	If i%FilePath'=path {
 		Set i%FilePath=path
 		If ..Connected {
@@ -181,6 +186,8 @@ Method restoreFilePath(pOldPath As %String) As %Status [ Internal ]
 
 Method CharsetSet(cset As %String) As %Status [ Internal ]
 {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - CharsetSet()"
+ Set ^TESTftp((0-$G(^TESTftp)),"cset") = $Get(cset)
 	Set tTable = "RAW"
 	If i%Charset'=cset && ..Connected {
 		Set csetlc=$ZCVT(cset,"L")
@@ -342,7 +349,7 @@ Method OnTask() As %Status [ Internal ]
 		}
 		Quit tSC
 	}
-
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - OnTask()"
 	Set $ZT="Trap", tSC=$$$OK, (tOneFilename,tFullFilename,tFilename,tTableKey)="", tDone=0
 	Do {
 		Quit:""=..FileSpec
@@ -353,12 +360,14 @@ Method OnTask() As %Status [ Internal ]
 				If ..FileSpec = "" {
 					#; Empty ..%currentFileSpec and non empty ..%completeFileSpec will be indicator to finish current OnTask() cycle
 					Set ..FileSpec = ..%completeFileSpec
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Do ..Disconnect(1) on line 356"
 					Do:'..StayConnected ..Disconnect(1)
 					Quit
 				}
 			}
 			#; get file list
 			$$$catTRACE("connwait","Looking for files '"_..FileSpec_"' in path '"_..FilePath_"'")
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Looking for files '"_..FileSpec_"' in path '"_..FilePath_"'"
 			Set tSC=..%CurrResultSet.Execute($this,..FilePath,..FileSpec,..SubdirectoryLevels,$S(..%isSFTP:"FileListSSH",1:"FileList"),..SemaphoreSpec)  Quit:$$$ISERR(tSC)
 			Kill ^||Ens.FileInbound.Found,^||Ens.FileInbound.Semaphore
 		} Else {
@@ -373,6 +382,7 @@ Method OnTask() As %Status [ Internal ]
 		}
 		#; find the next one that can be processed
 		For {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - OnTask() - For ?LastFileNeedsRetrying: "_..%LastFileNeedsRetrying
 			/* 
 				Check if the last file needs retrying 
 				and use the current row rather than advancing.
@@ -382,6 +392,7 @@ Method OnTask() As %Status [ Internal ]
 			} Else {
 				If '..%CurrResultSet.Next(.tSC) {
 					#; Done iterating the ResultSet for the current query execution - clean it up
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Done iterating the ResultSet for the current query execution - clean it up"
 					Do ..%CurrResultSet.Close()
 					Kill ..%CurrResultSet.Data ; clean it out so next loop iteration will re-Execute the query
 					#; delete the semaphore files used in this cycle
@@ -397,17 +408,30 @@ Method OnTask() As %Status [ Internal ]
 						Set tTableKey=$O(^||Ens.FileInbound.Semaphore(tTableKey),1,tSemaphorename)
 					}
 					#; Don't disconnect if in multi spec parse
+					If '..%fileSpecHasMulti || $$$ISERR(tSC) || (..%currentFileSpec = "") {
+						If '..StayConnected {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Do ..Disconnect(1) on line 416"
+ Set ^TESTftp((0-$G(^TESTftp)),"multi") = ..%fileSpecHasMulti
+ Set ^TESTftp((0-$G(^TESTftp)),"tSC") = tSC
+ Set ^TESTftp((0-$G(^TESTftp)),"currFileSpec") = ..%currentFileSpec
+						}
+					} 
 					If '..%fileSpecHasMulti || $$$ISERR(tSC) || (..%currentFileSpec = "") Do:'..StayConnected ..Disconnect(1)
 					#; Remove errored files from the Error global if they no longer exist, and remove processed files from the Done global if they no longer exist
+ Set ^TESTftp((0-$I(^TESTftp))) = "#; Remove errored files from the Error global if they no longer exist, and remove processed files from the Done global if they no longer exist"
 					Quit:$$$ISERR(tSC) ; if the list failed we don't know if the files are still there
 					Set tk="" For  Set tk=$O($$$DoneFileTable(tk)) Quit:tk=""   If ""=$G(^||Ens.FileInbound.Found(tk)) $$$sysTRACE("Removed absent file keyed as '"_tk_"' from processed list")  Kill $$$DoneFileTable(tk)
 					Set tk="" For  Set tk=$O($$$ErrorFileTable(tk)) Quit:tk=""  If ""=$G(^||Ens.FileInbound.Found(tk)) If ""'=$G($$$ErrorFileTable(tk)) { $$$sysTRACE("Removed absent file keyed as '"_tk_"' from errored list") } If $D($$$DoneFileTable(tk)) { Set $$$ErrorFileTable(tk)="" } Else { Kill $$$ErrorFileTable(tk) }
+ //Merge ^TESTftp((0-$I(^TESTftp))) = $$$ErrorFileTable
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Quit on line 422"
 					Quit
 				} Else { $$$ASSERT($$$ISOK(tSC)) }
 			}
 			Set tOneFilename=..%CurrResultSet.Data("ItemName"), tFullFilename=..%CurrResultSet.Data("Name"), tFileDir=..%CurrResultSet.Data("ItemDir"), tModified=..%CurrResultSet.Data("DateModified"), tSize=..%CurrResultSet.Data("Size"), tSemaphorename=..%CurrResultSet.Data("SemaphoreName")  $$$ASSERT(""'=tOneFilename&&(""'=tFullFilename))
 			Set tTableKey = ..getFileSubscript(tFullFilename)
+ Set ^TESTftp((0-$I(^TESTftp)),"tTableKey") = tTableKey
 			Set ^||Ens.FileInbound.Found(tTableKey)=tFullFilename
+			Do ##class(Oliver.FileLogger).LogFile(tOneFilename,tModified,tSize)  // tFullFilename includes Path
 			#;Hash to avoid subscript error from long filename and path
 			#;Delete all used semaphore files at the end of polling cycle. "*/
 			If (tSemaphorename'="")&&..DeleteFromServer Set ^||Ens.FileInbound.Semaphore($system.Encryption.SHA1Hash(tFileDir_tSemaphorename))=$LB(tFileDir,tSemaphorename)
@@ -436,15 +460,16 @@ Method OnTask() As %Status [ Internal ]
 					#; Check to see if same date & filesize but now displaying year instead of time. Update table if so
 					If (tTabModified'=tModified) && ($P(tTabModified,"_",1,*-1)=$P(tModified,"_",1,*-1)) && ($P(tTabModified,"_",*) ? 2N1":"2N) && ($P(tModified,"_",*) ? 4N) {
 						Set $$$ErrorFileTable(tTableKey) = tModified
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Line 460 - Set $$$ErrorFileTable "_tTableKey
 					}
 				}
 				If $$$ErrorFileTable(tTableKey)=tModified {
 					If $G($$$ErrorFileTableNode(tTableKey,"wrn")) {
 						Kill $$$ErrorFileTableNode(tTableKey,"wrn")
-						$$$LOGWARNING($$$FormatText($$$Text("Skipping previously errored file '%1' with timestamp '%2'"),tFullFilename,tModified))
+						// $$$LOGWARNING($$$FormatText($$$Text("Skipping previously errored file '%1' with timestamp '%2'"),tFullFilename,tModified))
 					}
 					Lock -$$$ErrorFileTable(tTableKey)
-					Continue
+					// Continue
 				}
 			}
 			If ..VMSLatestVersionOnly && ..%isVMS && ('..IsVMSLatestVersion(tFullFilename)) {
@@ -465,19 +490,24 @@ Method OnTask() As %Status [ Internal ]
 				}
 				Lock -$$$ErrorFileTable(tTableKey)  Continue
 			}
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Line 490 - Set $$$ErrorFileTable "_tTableKey
 			Set $$$ErrorFileTable(tTableKey)=tModified, $$$ErrorFileTableNode(tTableKey,"wrn")=1
 			Set tFilename=tOneFilename, tOneFilename=""
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Line 493 - Quit ; found a good one (For)"
 			Quit ; found a good one
 		}
 		Quit:""=tFilename
+ Set ^TESTftp((0-$I(^TESTftp))) = "About to process file '"_tFullFilename_"' (size '"_tSize_"') with timestamp '"_tModified_"', ConfirmComplete="_..ConfirmComplete
 		$$$sysTRACE("About to process file '"_tFullFilename_"' (size '"_tSize_"') with timestamp '"_tModified_"', ConfirmComplete="_..ConfirmComplete)
 		Set tSC=..processFile(tFilename,.tModified,tSize,.tDone,tFileDir,tSemaphorename)
+ Set ^TESTftp((0-$I(^TESTftp))) = "After process file ?tSC: "_tSC
 		#; If error before completing the processing e.g. ProcessInput returned an error do not mark the file as done.
 		If $$$ISERR(tSC),'tDone Quit
 		#; mark the file as done if not deleted, whether or not we tried. e.g. we could get disconnected after having obtained the file and during successful processing.
 		Set:tDone>0 $$$DoneFileTable(tTableKey)=tModified
 	} While 0
 Exit
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - OnTask() - Exit ?tDone: "_tDone
 	If tDone {
 		#;If were supposed to delete but failed the delete then errored tSC expected.
 		If (tDone=-1)||('..DeleteFromServer) $$$ASSERT($$$ISOK(tSC))
@@ -490,17 +520,20 @@ Exit
 	} ElseIf $$$ISERR(tSC) {
 		#;If tDone and an error then the disconnect would have been handled in processFile()
 		Set tErrText=$$$StatusText(tSC)
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : tErrText: "_tErrText
 		Do ..disconnectOnNetErr(tErrText,1)
 		#; Don't count it as a file error if it was a network error or retryable
 		If (""'=tFilename) && ('..Connected || (($$$StatusDisplayString(tSC)["<Ens>ErrFTP") && (tErrText?.E1"="1(1"52"1N,1"4"2N)1PC.E))) { ; retry on timeouts also
 			Kill $$$ErrorFileTable(tTableKey)
 			Set ..%LastFileNeedsRetrying=1
+ Set ^TESTftp((0-$I(^TESTftp)),"%LastFileNeedsRetrying") = ..%LastFileNeedsRetrying
 		}
 		If ..StayConnected {
 			If '..Connected Set ..%LastNetErr=tErrText
 		} Else {
 			#; Need to disconnect if StayConnected is 0 and error returned by %CurrResultSet.Execute()
 			#; NoOp if already disconnected
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" #; Need to disconnect if StayConnected is 0 and error returned by %CurrResultSet.Execute()"
 			Do ..Disconnect(1)
 		}
 	}
@@ -531,6 +564,7 @@ Trap
 
 Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %String, Output pDone As %Boolean, pFileDir As %String, pSemaphorename As %String = "") As %Status [ Internal ]
 {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - processFile()"
 	Set (tComplete,pDone,tEverSize)=0, (tSize,tNewSize,tOldSize)=pSize, tFirst=1, tSizeTargTime="", tSC=$$$OK
 	Do {
 		Set tSaveAsFile=(""'=..ArchivePath||..BusinessHost.ArchiveIO||..UseFileStream)
@@ -539,6 +573,7 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 													, 1:$S(tSaveAsFile:##class(%FileCharacterStream).%New(), 1:##class(%GlobalCharacterStream).%New()))
 		Set tSC=$G(%objlasterror,$$$OK)
 		Set:'$IsObject(tStream)||$$$ISERR(tSC) tSC=$$$ERROR($$$EnsErrGeneral,"Failed to create archive stream due to error:"_$S($$$ISERR(tSC):$$$StatusDisplayString(tSC),1:$$$ERROR($$$EnsErrGeneral,"%New() failed with no error report")))
+		If $$$ISERR(tSC) Set ^TESTftp((0-$I(^TESTftp))) = $System.Status.GetErrorText(tSC)
 		Quit:$$$ISERR(tSC)
 		If tSaveAsFile {
 			If ""=..ArchivePath { Set tArchiveName="" }
@@ -546,23 +581,29 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 				Set tArchiveName=..getArchiveFilename(pFilename)
 				Set tSC=tStream.LinkToFile(tArchiveName)
 				If $$$ISERR(tSC) { $$$LOGWARNING("Failed to create archive file '"_tArchiveName_"' due to error:"_$$$StatusDisplayString(tSC)) }
+ If $$$ISERR(tSC) Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" Failed to create archive file '"_tArchiveName_"' due to error:"_$$$StatusDisplayString(tSC)
 			}
 		}
 		If (pSemaphorename'="") $$$sysTRACE("Got semaphore file "_pSemaphorename_" for "_pFilename)
 		#; Get the file
 		For { ; loop getting chunks
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - processFile() - For ?tFirst: "_tFirst
 			Set:..ConfirmComplete&&(""=tSizeTargTime) tSizeTargTime = $ZH+..FileAccessTimeout
 			If tFirst {
 				Set tSC=..retrieveFile(pFilename,tStream,pFileDir,0)
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : After retrieveFile() ?tSC: "_tSC
 				If $$$ISERR(tSC) {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_$System.Status.GetErrorText(tSC)
 					#; If it was an AS/400 *FILE, quit OK but save the error - we will only return it later if no *MEM members are found.
 					#; Don't count it as a file error if it was a network error
 					Set tStyle = $ZSTRIP($ZCVT(..ServerListStyle,"L"),"*W","-_,;:/")
 					Set:tStyle="as400"&&("*FILE"=$E(pModified,*+1-$L("*FILE"),*))&&..FTP.Connected ..%LastErr=tSC, tSC=$$$OK, ..BusinessHost.%WaitForNextCallInterval=0
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Quit on line 586"
 					Quit
 				}
 			} ElseIf tNewSize>tOldSize {
 				Set tSC=..retrieveFile(pFilename,tStream,pFileDir,1)  Quit:$$$ISERR(tSC) ; retry
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : After retrieveFile() ?tSC: "_tSC
 			}
 			Set tNewFilename=pFilename, tOldMod=pModified
 			If (+tSize'=tSize||'(..ConfirmComplete#2)) {
@@ -579,6 +620,7 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 			}
 			If +tSize'=tSize && (..ConfirmComplete#2) {
 				Set tSC=$$$ERROR($$$EnsErrGeneral,"Unable to verify ConfirmComplete=Size size because initial SizeExpression result = '"_tSize_"'")
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_$System.Status.GetErrorText(tSC)
 				Quit
 			} ElseIf tNewSize>tSize {
 				Set tNow=$ZH
@@ -604,6 +646,7 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 				If '(..ConfirmComplete#2) || (tNow>=tSizeTargTime) || ((tNewSize=tSize) && 'tFirst) {
 					If ..ConfirmComplete#2 && (tNewSize="") && (tNow>=tSizeTargTime) {
 						Set tSC=$$$ERROR($$$EnsErrGeneral,"Could not get "_$S(tEverSize:"",1:"any ")_"size for "_pFilename_" ConfirmComplete=Size verification within FileAccessTimeout("_..FileAccessTimeout_")")
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_$System.Status.GetErrorText(tSC)
 						Quit
 					}
 					If '(..ConfirmComplete\2#2) {
@@ -619,6 +662,7 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 						If tOK {
 							Set tOK=..rename(tNewFilename,pFilename,pFileDir)
 							If tOK {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Confirmed complete "_pFilename_" via rename to "_tNewFilename_"; renaming back again"
 								$$$sysTRACE("Confirmed complete "_pFilename_" via rename to "_tNewFilename_"; renaming back again")
 								Set tNewFilename=pFilename
 								Set tComplete=1
@@ -626,9 +670,11 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 							}
 						}
 						#; If 'tOK
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : InboundAdapter - processFile - line 655 - rename failed"
 						Do ..disconnectOnNetErr(,1)
 						If tNow>=tSizeTargTime || '..Connected {
 							Set tSC=$$$ERROR($$$EnsErrGeneral,"Failed to confirm complete "_pFilename_"("_tStream.Size_") listed as size "_tSize_" by renaming to "_tNewFilename_" within FileAccessTimeout("_..FileAccessTimeout_") : FTP code "_..FTP.ReturnCode_" - "_..FTP.ReturnMessage)
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_$System.Status.GetErrorText(tSC)
 							Quit
 						} Else {
 							$$$sysTRACE("Got "_pFilename_"("_tStream.Size_") listed as size "_tSize_" but can't rename it yet : FTP code "_..FTP.ReturnCode_" - "_..FTP.ReturnMessage_"; trying for more data")
@@ -648,15 +694,19 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 			Set:""'=tNewSize tOldSize=tSize, tSize=tNewSize ; re-base the size
 			Set tFirst=0
 		} ; end chunk loop
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - processFile() - After For ?tComplete: "_tComplete
 
 		If tComplete {
 			#;If saving as a file, 0 size  and never been written to we need to force creation with an empty Write
 			If tSaveAsFile,(tStream.Size=0),tStream.%IsNull() {Set tSC=tStream.Write() Quit:$$$ISERR(tSC)}
 			Set tTxt="Retrieved file '"_pFilename_"' of size "_tStream.Size_" (modified='"_pModified_"')"_$S(tSaveAsFile:", archived as file '"_tStream.Filename_"'",1:"")
 			If ..%logTransfers { $$$LOGINFO(tTxt) } Else { $$$sysTRACE(tTxt) }
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : "_tTxt
 			Set tStream.Attributes("Filename")=pFilename, tStream.Attributes("FTPDir")=pFileDir
 			If tSaveAsFile { Set tSC1=tStream.SaveStream() If $$$ISERR(tSC1) $$$LOGERROR("Failed to save retrieved file '"_pFilename_"' of size "_tStream.Size_" to archive file '"_tStream.Filename_"'; Status: "_$$$StatusDisplayString(tSC1)) }
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : Before Set tSC = ..BusinessHost.ProcessInput(tStream) Quit:$$$ISERR(tSC)"
 			Set tSC = ..BusinessHost.ProcessInput(tStream) Quit:$$$ISERR(tSC)
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : After Set tSC = ..BusinessHost.ProcessInput(tStream) Quit:$$$ISERR(tSC)"
 			Kill tStream
 			Set pDone=1
 			If ..DeleteFromServer {
@@ -674,13 +724,20 @@ Method processFile(pFilename As %String, ByRef pModified As %String, pSize As %S
 			}
 		}
 	} While 0
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - End processFile() ?tSC: "_tSC
+ If $$$ISERR(tSC) Set ^TESTftp((0-$G(^TESTftp)),"tSC") = $System.Status.GetErrorText(tSC)
 	Quit tSC
 }
 
 Method delete(pFilename As %String, pFileDir As %String) As %Boolean
 {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - delete()"
+ Set ^TESTftp((0-$G(^TESTftp)),"pFilename") = $Get(pFilename)
+ Set ^TESTftp((0-$G(^TESTftp)),"pFileDir") = $Get(pFileDir)
 	Set tSC=..setFilePath(pFileDir,.tOldDir)  If $$$ISERR(tSC) { $$$LOGSTATUS(tSC)  Quit 0 }
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - delete - line 714"
 	Set tOK=$S(..%isSFTP:..FTP.DeleteSSH(pFilename),1:..FTP.Delete(pFilename))
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - delete - line 716 ?tOK: "_tOK
 	Do:'tOK ..disconnectOnNetErr(,1)
 	If ..Connected { Set tSC=..restoreFilePath(tOldDir)  If $$$ISERR(tSC) $$$LOGSTATUS(tSC)  Quit 0 }
 	Quit tOK
@@ -688,8 +745,14 @@ Method delete(pFilename As %String, pFileDir As %String) As %Boolean
 
 Method rename(pFilename As %String, pNewFilename As %String, pFileDir As %String) As %Boolean
 {
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - rename()"
+ Set ^TESTftp((0-$G(^TESTftp)),"pFilename") = $Get(pFilename)
+ Set ^TESTftp((0-$G(^TESTftp)),"pNewFilename") = $Get(pNewFilename)
+ Set ^TESTftp((0-$G(^TESTftp)),"pFileDir") = $Get(pFileDir)
 	Set tSC=..setFilePath(pFileDir,.tOldDir)  If $$$ISERR(tSC) { $$$LOGSTATUS(tSC)  Quit 0 }
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - rename - line 729"
 	Set tOK=$S(..%isSFTP:..FTP.RenameSSH(pFilename,pNewFilename),1:..FTP.Rename(pFilename,pNewFilename))
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - rename - line 731 ?tOK: "_tOK
 	Do:'tOK ..disconnectOnNetErr(,1)
 	If ..Connected { Set tSC=..restoreFilePath(tOldDir)  If $$$ISERR(tSC) $$$LOGSTATUS(tSC)  Quit 0 }
 	Quit tOK
@@ -697,10 +760,19 @@ Method rename(pFilename As %String, pNewFilename As %String, pFileDir As %String
 
 Method retrieveFile(pFilename As %String, pStream As %AbstractStream, pFileDir As %String, pRetry As %Boolean) As %Status
 {
-	Set tSC=..setFilePath(pFileDir,.tOldDir)  Quit:$$$ISERR(tSC) tSC
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - retrieveFile()"
+ Set ^TESTftp((0-$G(^TESTftp)),"pFilename") = $Get(pFilename)
+ Set ^TESTftp((0-$G(^TESTftp)),"pFileDir") = $Get(pFileDir)
+ Set ^TESTftp((0-$G(^TESTftp)),"pRetry") = $Get(pRetry)
+ 	Set tSC=..setFilePath(pFileDir,.tOldDir)  Quit:$$$ISERR(tSC) tSC
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - retrieveFile - line 752"
 	Set tOK=$S(pRetry:..FTP.RetryRetrieve(pFilename,pStream),1:..FTP.Retrieve(pFilename,pStream))
+ Set ^TESTftp((0-$I(^TESTftp))) = $ZDateTime($NOW(),8,1,3)_" : "_$JOB_" : FTP Inbound Adapter - retrieveFile - line 755 ?tOK: "_tOK
 	If 'tOK {
 		Set tSC=$$$ERROR($$$EnsErrFTPGetFailed,pFilename_$S(pRetry:"+"_pStream.Size,1:""),..FTP.ReturnMessage,..FTP.ReturnCode)
+ Set ^TESTftp((0-$G(^TESTftp)),"tSC") = $System.Status.GetErrorText(tSC)
+ Set ^TESTftp((0-$G(^TESTftp)),"ReturnMessage") = ..FTP.ReturnMessage
+ Set ^TESTftp((0-$G(^TESTftp)),"ReturnCode") = ..FTP.ReturnCode
 		Do ..disconnectOnNetErr(,1)
 	}
 	If ..Connected { Set tSC1=..restoreFilePath(tOldDir)  If $$$ISERR(tSC1) $$$LOGSTATUS(tSC1) }
